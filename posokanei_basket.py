@@ -143,9 +143,14 @@ def tally(basket, retailers):
 # HTML
 # --------------------------------------------------------------------------- #
 def render_html(summary, rows, generated):
+    cheapest_total = rows[0]["total"]
     data_json = json.dumps({
         "labels": [r["display"] for r in rows],
         "index": [r["index"] for r in rows],
+        # price-competitiveness on a true 0-100 scale: cheapest = 100%, pricier
+        # chains proportionally lower (cheapest basket / this basket * 100).
+        "competitiveness": [round(100.0 * cheapest_total / r["total"], 1) for r in rows],
+        "overpay": [round(r["index"] - 100.0, 1) for r in rows],
         "totals": [round(r["total"], 2) for r in rows],
         "wins": [round(r["wins"], 1) for r in rows],
     }, ensure_ascii=False)
@@ -231,9 +236,10 @@ def render_html(summary, rows, generated):
 
   <div class="card mb-4">
     <div class="card-body">
-      <h2 class="h5 mb-3">Basket cost index — cheapest = 100%</h2>
-      <p class="text-muted small mb-3">Each bar is that retailer's total for the identical basket,
-         relative to the cheapest. 110% means you'd pay 10% more there.</p>
+      <h2 class="h5 mb-3">Price-competitiveness index — cheapest = 100%</h2>
+      <p class="text-muted small mb-3">Each bar is the cheapest basket as a share of that
+         retailer's basket (cheapest&nbsp;÷&nbsp;retailer). The cheapest sits at 100%; a
+         shorter bar means a pricier basket. Hover for the exact total and how much more you'd pay.</p>
       <canvas id="indexChart" height="120"></canvas>
     </div>
   </div>
@@ -300,16 +306,17 @@ def render_html(summary, rows, generated):
 <script>
 const D = {data_json};
 const cheapestColor = '#198754';
-const barColors = D.index.map((v,i) => i === 0 ? cheapestColor
-    : `rgba(220,53,69,${{0.35 + 0.55*Math.min(1,(v-100)/25)}})`);
+// colour by how far below 100% (i.e. how much pricier) each bar is
+const barColors = D.competitiveness.map((v,i) => i === 0 ? cheapestColor
+    : `rgba(220,53,69,${{0.35 + 0.55*Math.min(1,(100-v)/15)}})`);
 
 new Chart(document.getElementById('indexChart'), {{
   type: 'bar',
   data: {{
     labels: D.labels,
     datasets: [{{
-      label: 'Cost index (%)',
-      data: D.index,
+      label: 'Price-competitiveness (%)',
+      data: D.competitiveness,
       backgroundColor: barColors,
       borderRadius: 4,
     }}]
@@ -319,13 +326,18 @@ new Chart(document.getElementById('indexChart'), {{
     plugins: {{
       legend: {{ display: false }},
       tooltip: {{ callbacks: {{
-        label: (c) => ` ${{c.parsed.x.toFixed(1)}}%  (€${{D.totals[c.dataIndex].toLocaleString()}})`
+        label: (c) => {{
+          const i = c.dataIndex;
+          const more = D.overpay[i] > 0 ? `  ·  +${{D.overpay[i].toFixed(1)}}% vs cheapest` : '  ·  cheapest';
+          return ` ${{c.parsed.x.toFixed(1)}}%  (€${{D.totals[i].toLocaleString()}})${{more}}`;
+        }}
       }} }}
     }},
     scales: {{
       x: {{
-        min: 95,
-        title: {{ display: true, text: 'Cost index — cheapest = 100%' }},
+        min: 0,
+        max: 100,
+        title: {{ display: true, text: 'Price-competitiveness — cheapest = 100%' }},
         ticks: {{ callback: (v) => v + '%' }}
       }}
     }}
