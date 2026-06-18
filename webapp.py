@@ -501,6 +501,28 @@ def timeseries_page(lang, path):
     return page(S["mv_title"], body, lang, path)
 
 
+def report_view(kind, date, lang, path):
+    """Wrap a generated report (a standalone HTML file) in the app shell so the
+    navbar/language switcher stay visible. The report itself is embedded in a
+    same-origin iframe that auto-sizes to its content. Returns (html, status)."""
+    S = T[lang]
+    title = S["nav_cheapest"] if kind == "basket" else S["nav_collusion"]
+    fp = report_path(kind, date)
+    if not fp:
+        forwhom = " " + S["report_for"].format(date=html.escape(date)) if date else ""
+        body = (f'<div class="card"><div class="card-body text-center py-5">'
+                f'<h1 class="h4">{S["report_unavailable"]}{forwhom}</h1>'
+                f'<p class="text-muted">{S["report_run_first"]} <code>python3 orchestrate.py</code></p>'
+                f'<a class="btn btn-primary" href="/">{S["back_dashboard"]}</a></div></div>')
+        return page(title, body, lang, path), 404
+    qs = f"?date={html.escape(date)}" if date else ""
+    body = (f'<iframe src="/report/{kind}/raw{qs}" title="{html.escape(title)}" '
+            f'style="width:100%;border:0;min-height:85vh;background:#fff" '
+            f'onload="try{{this.style.height=this.contentWindow.document.body.scrollHeight+24+\'px\'}}catch(e){{}}">'
+            f'</iframe>')
+    return page(title, body, lang, path), 200
+
+
 # --------------------------------------------------------------------------- #
 # server
 # --------------------------------------------------------------------------- #
@@ -539,19 +561,17 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(timeseries_page(lang, path), set_lang=set_lang)
             elif path in ("/report/cartel", "/report/basket"):
                 kind = path.rsplit("/", 1)[1]
+                html_out, code = report_view(kind, date, lang, path)
+                self._send(html_out, code=code, set_lang=set_lang)
+            elif path in ("/report/cartel/raw", "/report/basket/raw"):
+                kind = path.split("/")[2]
                 fp = report_path(kind, date)
                 if fp:
                     with open(fp, "rb") as f:
-                        self._send(f.read(), set_lang=set_lang)
+                        self._send(f.read())
                 else:
-                    S = T[lang]
-                    forwhom = " " + S["report_for"].format(date=html.escape(date)) if date else ""
-                    self._send(page(S["report_unavailable"], f"""
-                      <div class="card"><div class="card-body text-center py-5">
-                      <h1 class="h4">{S['report_unavailable']}{forwhom}</h1>
-                      <p class="text-muted">{S['report_run_first']} <code>python3 orchestrate.py</code></p>
-                      <a class="btn btn-primary" href="/">{S['back_dashboard']}</a></div></div>""",
-                      lang, path), code=404, set_lang=set_lang)
+                    self._send("<!doctype html><p style='font:14px sans-serif;padding:2rem'>"
+                               "report not available</p>", code=404)
             elif path == "/api/trends":
                 self._send(json.dumps(trends()), "application/json")
             elif path == "/api/runs":
