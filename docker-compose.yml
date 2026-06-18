@@ -1,0 +1,17 @@
+services:
+  posokanei:
+    # Build locally, or comment out `build:` to pull the published image instead.
+    build: .
+    image: ghcr.io/apantsiop/posokanei-monitor:latest
+    container_name: posokanei-monitor
+    ports:
+      - "8000:8000"
+    # Bind-mount the data dir so the catalogue, snapshots, reports and SQLite
+    # DB persist on the host and any data you've already scraped is reused.
+    # Swap for a named volume if you prefer Docker-managed storage.
+    volumes:
+      - ./posokanei_data:/app/posokanei_data
+    environment:
+      - TZ=Europe/Athens
+      - PORT=8000
+    restart: unless-stopped

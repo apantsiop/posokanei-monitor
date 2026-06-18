@@ -1,0 +1,16 @@
+# Runtime data: catalogue, snapshots, reports, SQLite DB — all generated, not source.
+posokanei_data/
+
+# Local render / test artifacts
+*.png
+*.log
+.playwright-mcp/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

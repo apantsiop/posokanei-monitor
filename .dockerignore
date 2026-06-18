@@ -1,0 +1,11 @@
+# Keep the build context tiny — data is mounted at runtime, not baked in.
+posokanei_data/
+.playwright-mcp/
+*.png
+*.log
+__pycache__/
+*.pyc
+.git/
+.github/
+memory/
+README.md

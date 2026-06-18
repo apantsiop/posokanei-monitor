@@ -1,0 +1,6 @@
+# PosoKanei daily pipeline — installed into the container's root crontab.
+# Runs the full scrape→reports→DB pipeline once a day at 06:00 (container TZ).
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+
+0 6 * * * cd /app && python orchestrate.py >> /app/posokanei_data/logs/cron.log 2>&1
