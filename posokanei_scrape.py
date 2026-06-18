@@ -44,7 +44,7 @@ MAX_PAGE_SIZE = 100
 # --------------------------------------------------------------------------- #
 # HTTP
 # --------------------------------------------------------------------------- #
-def fetch_json(path, params=None, retries=5, backoff=1.5, timeout=30):
+def fetch_json(path, params=None, retries=5, backoff=1.5, timeout=60):
     """GET {API}{path}?params and return parsed JSON, with retries + backoff."""
     url = API + path
     if params:
@@ -136,11 +136,13 @@ def iter_all_products(countries="all", page_size=MAX_PAGE_SIZE, max_pages=None,
     page = 1
     total = None
     while True:
+        # NB: deliberately NO sort_by/sort_order. A full harvest needs every
+        # product regardless of order, and the API's sorted path is expensive
+        # (it has been returning 500/502/timeouts under load) whereas the
+        # unsorted query responds in well under a second.
         params = {
             "page": page,
             "page_size": page_size,
-            "sort_by": "unit_price",
-            "sort_order": "asc",
             "countries": countries,
         }
         data = fetch_json("/products", params)
