@@ -52,6 +52,7 @@ def fetch_json(path, params=None, retries=5, backoff=1.5, timeout=30):
 
     last_err = None
     for attempt in range(1, retries + 1):
+        retry_after = None
         try:
             req = urllib.request.Request(
                 url,
@@ -68,15 +69,19 @@ def fetch_json(path, params=None, retries=5, backoff=1.5, timeout=30):
                     raw = gzip.GzipFile(fileobj=io.BytesIO(raw)).read()
                 return json.loads(raw.decode("utf-8"))
         except urllib.error.HTTPError as e:
-            # 4xx (except 429) won't get better by retrying.
+            # 4xx (except 429) won't get better by retrying. 5xx (e.g. a 503 from
+            # the load balancer when the backend is down) and 429 are retried.
             if e.code != 429 and 400 <= e.code < 500:
                 raise
             last_err = e
+            ra = e.headers.get("Retry-After") if e.headers else None
+            if ra and ra.isdigit():
+                retry_after = min(int(ra), 60)  # honour, but cap the wait
         except (urllib.error.URLError, TimeoutError, ConnectionError) as e:
             last_err = e
 
         if attempt < retries:
-            wait = backoff ** attempt
+            wait = retry_after if retry_after is not None else backoff ** attempt
             print(f"  ! {url} failed ({last_err}); retry {attempt}/{retries} in {wait:.1f}s",
                   file=sys.stderr)
             time.sleep(wait)
@@ -160,15 +165,27 @@ def iter_all_products(countries="all", page_size=MAX_PAGE_SIZE, max_pages=None,
 
 
 # --------------------------------------------------------------------------- #
-# CSV writers
+# Output writers (atomic: write to <path>.tmp, then os.replace)
 # --------------------------------------------------------------------------- #
+def _replace_tmp(path):
+    """Atomically move <path>.tmp onto <path>."""
+    os.replace(path + ".tmp", path)
+
+
+def write_json_atomic(path, obj):
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(obj, f, ensure_ascii=False, indent=2)
+    _replace_tmp(path)
+
+
 def write_categories_csv(path, rows):
     cols = ["category_id", "name", "name_en", "depth", "path",
             "product_count", "total_product_count", "is_leaf", "hidden"]
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path + ".tmp", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
+    _replace_tmp(path)
 
 
 def write_products_csv(path, products):
@@ -177,7 +194,7 @@ def write_products_csv(path, products):
             "unit", "unit_quantity", "min_price", "avg_price", "max_price",
             "min_unit_price", "retailer_count", "retailers",
             "available_countries", "is_international", "updated_at"]
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path + ".tmp", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         for p in products:
@@ -201,6 +218,7 @@ def write_products_csv(path, products):
                 "is_international": p.get("is_international"),
                 "updated_at": p.get("updated_at"),
             })
+    _replace_tmp(path)
 
 
 def write_prices_csv(path, products):
@@ -211,7 +229,7 @@ def write_prices_csv(path, products):
             "country", "price", "price_normalized", "is_discount",
             "discount_percentage", "last_updated"]
     n = 0
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with open(path + ".tmp", "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         for p in products:
@@ -234,6 +252,7 @@ def write_prices_csv(path, products):
                     "last_updated": rp.get("last_updated"),
                 })
                 n += 1
+    _replace_tmp(path)
     return n
 
 
@@ -256,15 +275,15 @@ def main():
     page_size = min(args.page_size, MAX_PAGE_SIZE)
     os.makedirs(args.out, exist_ok=True)
 
-    # 1) Categories
+    # 1) Categories — fetch and VALIDATE before touching the existing files, so a
+    #    transient API blip can never overwrite good data with an empty tree.
     print("Fetching category tree ...")
     tree = get_category_tree()
-    with open(os.path.join(args.out, "categories.json"), "w", encoding="utf-8") as f:
-        json.dump(tree, f, ensure_ascii=False, indent=2)
     cat_rows = flatten_categories(tree)
-    write_categories_csv(os.path.join(args.out, "categories.csv"), cat_rows)
+    if not cat_rows:
+        raise SystemExit("category tree came back empty — API likely unavailable; "
+                         "keeping previous data (nothing written).")
     leaves = sum(1 for r in cat_rows if r["is_leaf"])
-    print(f"  {len(cat_rows)} categories ({leaves} leaves) -> categories.csv / .json")
 
     # 2) Products + prices
     print(f"\nFetching products (countries={args.countries}) ...")
@@ -272,9 +291,18 @@ def main():
         countries=args.countries, page_size=page_size,
         max_pages=args.limit, delay=args.delay,
     ))
+    if not products:
+        raise SystemExit("no products returned — API likely unavailable; "
+                         "keeping previous data (nothing written).")
 
-    with open(os.path.join(args.out, "products.json"), "w", encoding="utf-8") as f:
-        json.dump(products, f, ensure_ascii=False, indent=2)
+    # Only now, with both fetches validated, commit everything atomically
+    # (write to a temp file, then os.replace) so a crash mid-write or a partial
+    # run cannot leave a corrupted/half catalogue behind.
+    write_json_atomic(os.path.join(args.out, "categories.json"), tree)
+    write_categories_csv(os.path.join(args.out, "categories.csv"), cat_rows)
+    print(f"  {len(cat_rows)} categories ({leaves} leaves) -> categories.csv / .json")
+
+    write_json_atomic(os.path.join(args.out, "products.json"), products)
     write_products_csv(os.path.join(args.out, "products.csv"), products)
     n_prices = write_prices_csv(os.path.join(args.out, "prices.csv"), products)
 

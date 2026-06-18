@@ -54,6 +54,14 @@ def latest_run():
     return rows[0] if rows else None
 
 
+def latest_ok_run():
+    """Most recent run that actually produced data (so an upstream API outage —
+    which records a failed run — doesn't blank out the dashboard)."""
+    rows = query("SELECT * FROM runs WHERE status='ok' AND catalog_size IS NOT NULL "
+                 "ORDER BY run_date DESC LIMIT 1")
+    return rows[0] if rows else None
+
+
 def trends():
     runs = query("SELECT * FROM runs ORDER BY run_date ASC")
     dates = [r["run_date"] for r in runs]
@@ -130,21 +138,41 @@ def empty_state():
 
 
 def dashboard():
-    run = latest_run()
-    if not run:
+    last = latest_run()
+    run = latest_ok_run()
+    if not run and not last:
         return empty_state()
+    if not run:
+        # We have runs, but none succeeded yet (e.g. the API has been down since
+        # day one). Show the failure prominently rather than a blank dashboard.
+        return page("Dashboard", f"""
+        <div class="alert alert-danger"><i class="bi bi-exclamation-octagon"></i>
+          Latest run <strong>{last['run_date']}</strong> failed and there is no earlier
+          successful run yet.<br><span class="small">{html.escape(str(last['notes'] or 'see logs'))}</span></div>
+        <p class="text-muted">This is usually the upstream API
+          (<code>api.posokanei.gov.gr</code>) being temporarily unavailable.
+          The pipeline retries on the next daily run; no action needed.</p>""")
+
     verdict_pct = run["max_overpay_pct"] or 0
-    notes = run["notes"]
-    note_html = (f'<div class="alert alert-warning py-2 small mb-4">'
-                 f'<i class="bi bi-exclamation-triangle"></i> {html.escape(notes)}</div>'
-                 if notes else "")
+    # Banner if the most recent run failed but we're showing older good data.
+    banner = ""
+    if last and last["run_date"] != run["run_date"]:
+        banner = (f'<div class="alert alert-warning d-flex align-items-center mb-4">'
+                  f'<i class="bi bi-exclamation-triangle me-2"></i><div>'
+                  f'Latest run <strong>{last["run_date"]}</strong> didn\'t complete'
+                  f'{" — " + html.escape(str(last["notes"])) if last["notes"] else ""}. '
+                  f'Showing the last successful run below.</div></div>')
+    elif run["notes"]:
+        banner = (f'<div class="alert alert-warning py-2 small mb-4">'
+                  f'<i class="bi bi-exclamation-triangle"></i> {html.escape(str(run["notes"]))}</div>')
     body = f"""
-    {note_html}
+    {banner}
     <div class="d-flex justify-content-between align-items-end mb-3">
       <h1 class="h3 mb-0">Daily price monitor</h1>
-      <span class="text-muted small">latest run <strong>{run['run_date']}</strong>
+      <span class="text-muted small">data from <strong>{run['run_date']}</strong>
         · status <span class="badge text-bg-{'success' if run['status']=='ok' else 'danger'}">{run['status']}</span>
-        · {run['duration_s'] and f"{run['duration_s']:.0f}s"} </span>
+        · {run['duration_s'] and f"{run['duration_s']:.0f}s"}
+        {('· last attempt ' + last['run_date'] + ' ✗') if last and last['run_date'] != run['run_date'] else ''}</span>
     </div>
 
     <div class="row g-3 mb-4">
