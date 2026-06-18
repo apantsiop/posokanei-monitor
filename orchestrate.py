@@ -124,17 +124,43 @@ def load_json(path):
         return {}
 
 
+def _pid_alive(pid):
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True   # exists, just not ours to signal
+    except OSError:
+        return False
+
+
 def acquire_lock():
     try:
         fd = os.open(LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
     except FileExistsError:
-        # stale lock? if older than 6h, steal it.
+        # Steal the lock if its holder is gone (e.g. the container was restarted
+        # mid-run, leaving the lock on the persistent volume) or it's very old.
+        stale = False
         try:
-            age = time.time() - os.path.getmtime(LOCK_PATH)
+            pid = int((open(LOCK_PATH).read().strip() or "0"))
+        except (OSError, ValueError):
+            pid = 0
+        if pid and not _pid_alive(pid):
+            stale = True
+        try:
+            if time.time() - os.path.getmtime(LOCK_PATH) > 6 * 3600:
+                stale = True
         except OSError:
-            age = 0
-        if age > 6 * 3600:
-            os.unlink(LOCK_PATH)
+            pass
+        if stale:
+            try:
+                os.unlink(LOCK_PATH)
+            except OSError:
+                pass
             return acquire_lock()
         return None
     os.write(fd, str(os.getpid()).encode())
