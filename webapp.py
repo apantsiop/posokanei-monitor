@@ -27,6 +27,7 @@ import datetime
 import html
 import json
 import os
+import re
 import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -269,6 +270,25 @@ def lang_switch(lang, path):
     return '<span class="ms-2">' + "".join(out) + '</span>'
 
 
+def navbar(lang, path):
+    """The app navigation bar. Self-contained (inline gradient style) so it can
+    also be injected into the standalone report documents."""
+    S = T[lang]
+    return f"""<nav class="navbar navbar-dark mb-4" style="background:linear-gradient(135deg,#0d6efd,#6610f2)">
+  <div class="container">
+    <a class="navbar-brand" href="/"><i class="bi bi-graph-up-arrow"></i> PosoKanei Monitor</a>
+    <div class="d-flex align-items-center flex-wrap gap-1">
+      <a class="btn btn-sm btn-outline-light" href="/"><i class="bi bi-speedometer2"></i> {S['nav_dashboard']}</a>
+      <a class="btn btn-sm btn-outline-light" href="/report/basket"><i class="bi bi-cart4"></i> {S['nav_cheapest']}</a>
+      <a class="btn btn-sm btn-outline-light" href="/report/cartel"><i class="bi bi-shield-check"></i> {S['nav_collusion']}</a>
+      <a class="btn btn-sm btn-outline-light" href="/report/timeseries"><i class="bi bi-activity"></i> {S['nav_movement']}</a>
+      <a class="btn btn-sm btn-outline-light" href="/runs"><i class="bi bi-clock-history"></i> {S['nav_runs']}</a>
+      {lang_switch(lang, path)}
+    </div>
+  </div>
+</nav>"""
+
+
 def page(title, body, lang, path):
     S = T[lang]
     return f"""<!doctype html>
@@ -285,19 +305,7 @@ def page(title, body, lang, path):
   .kpi-sub {{ font-size:.72rem; text-transform:uppercase; letter-spacing:.05em; color:#6c757d; }}
 </style>
 </head><body>
-<nav class="navbar navbar-dark mb-4">
-  <div class="container">
-    <a class="navbar-brand" href="/"><i class="bi bi-graph-up-arrow"></i> PosoKanei Monitor</a>
-    <div class="d-flex align-items-center flex-wrap gap-1">
-      <a class="btn btn-sm btn-outline-light" href="/"><i class="bi bi-speedometer2"></i> {S['nav_dashboard']}</a>
-      <a class="btn btn-sm btn-outline-light" href="/report/basket"><i class="bi bi-cart4"></i> {S['nav_cheapest']}</a>
-      <a class="btn btn-sm btn-outline-light" href="/report/cartel"><i class="bi bi-shield-check"></i> {S['nav_collusion']}</a>
-      <a class="btn btn-sm btn-outline-light" href="/report/timeseries"><i class="bi bi-activity"></i> {S['nav_movement']}</a>
-      <a class="btn btn-sm btn-outline-light" href="/runs"><i class="bi bi-clock-history"></i> {S['nav_runs']}</a>
-      {lang_switch(lang, path)}
-    </div>
-  </div>
-</nav>
+{navbar(lang, path)}
 <div class="container pb-5">{body}</div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </body></html>"""
@@ -502,9 +510,9 @@ def timeseries_page(lang, path):
 
 
 def report_view(kind, date, lang, path):
-    """Wrap a generated report (a standalone HTML file) in the app shell so the
-    navbar/language switcher stay visible. The report itself is embedded in a
-    same-origin iframe that auto-sizes to its content. Returns (html, status)."""
+    """Serve a generated report (a standalone HTML file) with the app navbar
+    injected straight into its document — no iframe, so a reverse proxy's
+    X-Frame-Options header can't block it. Returns (html, status)."""
     S = T[lang]
     title = S["nav_cheapest"] if kind == "basket" else S["nav_collusion"]
     fp = report_path(kind, date)
@@ -515,12 +523,15 @@ def report_view(kind, date, lang, path):
                 f'<p class="text-muted">{S["report_run_first"]} <code>python3 orchestrate.py</code></p>'
                 f'<a class="btn btn-primary" href="/">{S["back_dashboard"]}</a></div></div>')
         return page(title, body, lang, path), 404
-    qs = f"?date={html.escape(date)}" if date else ""
-    body = (f'<iframe src="/report/{kind}/raw{qs}" title="{html.escape(title)}" '
-            f'style="width:100%;border:0;min-height:85vh;background:#fff" '
-            f'onload="try{{this.style.height=this.contentWindow.document.body.scrollHeight+24+\'px\'}}catch(e){{}}">'
-            f'</iframe>')
-    return page(title, body, lang, path), 200
+    with open(fp, encoding="utf-8") as f:
+        doc = f.read()
+    # Inject the navbar right after the report's <body> tag (its <head> already
+    # loads Bootstrap, so the bar is styled; the bar carries its own gradient).
+    nav = navbar(lang, path)
+    new_doc, n = re.subn(r"(<body[^>]*>)", lambda m: m.group(1) + "\n" + nav, doc, count=1)
+    if n == 0:  # no <body> found — fall back to prepending
+        new_doc = nav + doc
+    return new_doc, 200
 
 
 # --------------------------------------------------------------------------- #
