@@ -1,9 +1,11 @@
 services:
   posokanei:
-    # Build locally, or comment out `build:` to pull the published image instead.
-    build: .
+    # Pulls the published multi-arch image from GHCR (no local build needed).
+    # To build from source instead, uncomment `build: .` below.
     image: ghcr.io/apantsiop/posokanei-monitor:latest
+    # build: .
     container_name: posokanei-monitor
+    pull_policy: always
     ports:
       - "8000:8000"
     # Bind-mount the data dir so the catalogue, snapshots, reports and SQLite
