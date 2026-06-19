@@ -105,6 +105,24 @@ T = {
                    "this screen tests whether competitors change prices in lockstep "
                    "(co-movement lift, same-direction rate, price leadership).",
         "mv_window": "Window {a} … {b} ({n} snapshots).",
+        "mv_caveat_active": "Only a few snapshots so far — treat these as preliminary. "
+                            "Co-movement signal becomes reliable with more daily snapshots.",
+        "mv_kpi_keys": "price series tracked",
+        "mv_kpi_intervals": "day-over-day intervals",
+        "mv_kpi_changes": "price changes observed",
+        "mv_kpi_rate": "overall change rate",
+        "mv_pairs_title": "Most co-moving retailer pairs",
+        "mv_pairs_help": "“Lift” = how many times more often two chains changed price together "
+                         "than chance predicts (1.0 = independent). High lift with a high "
+                         "same-direction rate is what would merit a closer look — not proof of anything.",
+        "mv_evaluated": "{n} retailer pairs evaluated.",
+        "mv_th_pair": "Retailer pair",
+        "mv_th_opps": "Shared items",
+        "mv_th_joint": "Joint / exp.",
+        "mv_th_lift": "Co-move lift",
+        "mv_th_samedir": "Same direction",
+        "mv_th_lockstep": "Identical price",
+        "mv_pairs_none": "No pairs have enough shared price changes yet.",
         # misc
         "report_unavailable": "Report not available",
         "report_for": "for {date}",
@@ -171,6 +189,24 @@ T = {
                    "ημερήσια στιγμιότυπα, ο έλεγχος εξετάζει αν οι ανταγωνιστές αλλάζουν τιμές "
                    "συντονισμένα (συν-μεταβολή, ποσοστό ίδιας κατεύθυνσης, ηγεσία τιμών).",
         "mv_window": "Περίοδος {a} … {b} ({n} στιγμιότυπα).",
+        "mv_caveat_active": "Λίγα στιγμιότυπα ακόμη — θεωρήστε τα προκαταρκτικά. Το σήμα "
+                            "συν-μεταβολής γίνεται αξιόπιστο με περισσότερα ημερήσια στιγμιότυπα.",
+        "mv_kpi_keys": "σειρές τιμών υπό παρακολούθηση",
+        "mv_kpi_intervals": "ημερήσια διαστήματα",
+        "mv_kpi_changes": "μεταβολές τιμών",
+        "mv_kpi_rate": "συνολικός ρυθμός μεταβολής",
+        "mv_pairs_title": "Ζεύγη αλυσίδων με τη μεγαλύτερη συν-μεταβολή",
+        "mv_pairs_help": "«Lift» = πόσες φορές περισσότερο από το τυχαίο άλλαξαν τιμή μαζί δύο "
+                         "αλυσίδες (1.0 = ανεξάρτητες). Υψηλό lift με υψηλό ποσοστό ίδιας "
+                         "κατεύθυνσης αξίζει περαιτέρω εξέταση — δεν αποτελεί απόδειξη.",
+        "mv_evaluated": "Αξιολογήθηκαν {n} ζεύγη αλυσίδων.",
+        "mv_th_pair": "Ζεύγος αλυσίδων",
+        "mv_th_opps": "Κοινά προϊόντα",
+        "mv_th_joint": "Κοινές / αναμ.",
+        "mv_th_lift": "Lift συν-μεταβολής",
+        "mv_th_samedir": "Ίδια κατεύθυνση",
+        "mv_th_lockstep": "Ίδια τιμή",
+        "mv_pairs_none": "Δεν υπάρχουν ακόμη ζεύγη με αρκετές κοινές μεταβολές τιμών.",
         # misc
         "report_unavailable": "Η αναφορά δεν είναι διαθέσιμη",
         "report_for": "για {date}",
@@ -500,11 +536,61 @@ def timeseries_page(lang, path):
         </div></div>"""
         return page(S["mv_title"], body, lang, path)
     market = data.get("market", {})
+    pairs = data.get("top_pairs", []) or []
+
+    def kpi(value, sub):
+        return (f'<div class="col-6 col-lg-3"><div class="card"><div class="card-body">'
+                f'<div class="kpi">{value}</div><div class="kpi-sub">{sub}</div></div></div></div>')
+    kpis = (
+        kpi(f"{market.get('keys_tracked', 0):,}", S["mv_kpi_keys"]) +
+        kpi(f"{market.get('observed_intervals', 0):,}", S["mv_kpi_intervals"]) +
+        kpi(f"{market.get('price_changes', 0):,}", S["mv_kpi_changes"]) +
+        kpi(f"{(market.get('overall_change_rate', 0) or 0)*100:.2f}%", S["mv_kpi_rate"])
+    )
+
+    def pct(x):
+        return "—" if x is None else f"{x*100:.0f}%"
+
+    rows = []
+    for p in pairs:
+        lift = p.get("comovement_lift")
+        if lift is None:
+            continue
+        sd = p.get("same_direction_rate")
+        hot = "table-warning" if (lift >= 2 and (sd or 0) >= 0.5) else ""
+        rows.append(
+            f"<tr class='{hot}'>"
+            f"<td><strong>{html.escape(p.get('retailer_a',''))}</strong> ↔ "
+            f"<strong>{html.escape(p.get('retailer_b',''))}</strong></td>"
+            f"<td class='text-end'>{p.get('opportunities', 0):,}</td>"
+            f"<td class='text-end'>{p.get('joint_changes', 0)} / {p.get('expected_joint', 0):.2f}</td>"
+            f"<td class='text-end fw-bold'>{lift:.2f}×</td>"
+            f"<td class='text-end'>{pct(sd)}</td>"
+            f"<td class='text-end'>{pct(p.get('lockstep_price_rate'))}</td>"
+            f"</tr>"
+        )
+    tbody = "".join(rows[:15]) or f"<tr><td colspan=6 class=text-center>{S['mv_pairs_none']}</td></tr>"
+    table = (
+        f"<div class='table-responsive'><table class='table table-sm table-hover align-middle mb-0'>"
+        f"<thead><tr><th>{S['mv_th_pair']}</th>"
+        f"<th class='text-end'>{S['mv_th_opps']}</th>"
+        f"<th class='text-end'>{S['mv_th_joint']}</th>"
+        f"<th class='text-end'>{S['mv_th_lift']}</th>"
+        f"<th class='text-end'>{S['mv_th_samedir']}</th>"
+        f"<th class='text-end'>{S['mv_th_lockstep']}</th></tr></thead>"
+        f"<tbody>{tbody}</tbody></table></div>"
+    )
+
     body = f"""
     <h1 class="h3 mb-3">{S['mv_title']}</h1>
-    <p class="text-muted">{S['mv_window'].format(a=snaps[0], b=snaps[-1], n=len(snaps))}</p>
+    <p class="text-muted">{S['mv_window'].format(a=snaps[0], b=snaps[-1], n=len(snaps))}
+       · {S['mv_evaluated'].format(n=data.get('pairs_evaluated', 0))}</p>
+    <div class="alert alert-info py-2 small"><i class="bi bi-hourglass-split"></i> {S['mv_caveat_active']}</div>
+    <div class="row g-3 mb-4">{kpis}</div>
     <div class="card"><div class="card-body">
-      <pre class="mb-0 small">{html.escape(json.dumps(market, indent=2, ensure_ascii=False))}</pre>
+      <h2 class="h6 mb-1">{S['mv_pairs_title']}</h2>
+      <p class="text-muted small mb-3">{S['mv_pairs_help']}</p>
+      {table}
     </div></div>"""
     return page(S["mv_title"], body, lang, path)
 
